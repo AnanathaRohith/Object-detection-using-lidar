@@ -1,0 +1,340 @@
+# Upgrade pip/setuptools/wheel
+!pip install --upgrade pip setuptools wheel
+
+# Install PyTorch 2.2.0 (CUDA 11.8 build, works in Colab)
+!pip install torch==2.2.0+cu118 torchvision==0.17.0+cu118 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu118
+
+# Install mmcv-lite (full version doesn't build on Colab Py3.12)
+!pip install mmcv==2.1.0
+
+# Other required dependencies
+!pip install nuscenes-devkit open3d matplotlib shapely tqdm opencv-python-headless
+
+import os
+
+DATASET_VERSION_DIR = os.path.join("/content/data/nuscenes", 'v1.0-mini')
+
+# List contents of the extracted directory
+if os.path.exists(DATASET_VERSION_DIR):
+    print(f"Contents of {DATASET_VERSION_DIR}:")
+    for item in os.listdir(DATASET_VERSION_DIR):
+         print(item)
+else:
+    print(f"Directory not found: {DATASET_VERSION_DIR}")
+# Create dataset directory
+!mkdir -p /content/data/nuscenes
+
+# Download nuScenes mini (about 1.4 GB)
+!wget -c https://www.nuscenes.org/data/v1.0-mini.tgz -O /content/data/nuscenes/v1.0-mini.tgz
+
+# Extract files
+!tar -xvzf /content/data/nuscenes/v1.0-mini.tgz -C /content/data/nuscenes/
+
+from nuscenes.nuscenes import NuScenes
+import os
+
+# Path to dataset
+DATASET_ROOT = "/content/data/nuscenes"
+
+# Load nuScenes v1.0-mini
+nusc = NuScenes(version='v1.0-mini', dataroot=DATASET_ROOT, verbose=True)
+
+# Print available scenes
+print("Available scenes:", len(nusc.scene))
+for i, scene in enumerate(nusc.scene):
+    print(f"Scene {i}: {scene['name']}, description: {scene['description']}")
+# Pick a random sample
+sample = nusc.sample[10]
+
+# Visualize the camera + 3D bounding boxes
+nusc.render_sample(sample['token'])
+# Visualize LiDAR with bounding boxes
+nusc.render_sample_data(sample['data']['LIDAR_TOP'], nsweeps=5, underlay_map=False)
+import shutil
+import os
+
+# Define the directory to save the sample data
+output_dir = "/content/saved_nuscenes_samples"
+os.makedirs(output_dir, exist_ok=True)
+
+# Get the tokens of the 10 samples you used
+sample_tokens_to_save = [nusc.sample[i]['token'] for i in range(10)]
+
+# Iterate through the samples and copy their data
+for sample_token in sample_tokens_to_save:
+    sample = nusc.get('sample', sample_token)
+    for sd_token in sample['data'].values():
+        sd = nusc.get('sample_data', sd_token)
+        src_path = os.path.join(nusc.dataroot, sd['filename'])
+        dest_path = os.path.join(output_dir, os.path.basename(sd['filename']))
+        if os.path.exists(src_path):
+            shutil.copy(src_path, dest_path)
+            print(f"Copied: {src_path} to {dest_path}")
+        else:
+            print(f"Warning: Source file not found: {src_path}")
+
+print(f"Sample data saved to: {output_dir}")
+# Example using zip to compress the folder
+!zip -r /content/saved_nuscenes_samples.zip /content/saved_nuscenes_samples
+
+# This will create a file named 'saved_nuscenes_samples.zip' that you can download.
+# Pick another sample (index 20 this time)
+sample2 = nusc.sample[20]
+
+# Render image + bounding boxes
+nusc.render_sample(sample2['token'])
+
+# Render LiDAR + 3D bounding boxes
+nusc.render_sample_data(sample2['data']['LIDAR_TOP'], nsweeps=5, underlay_map=False)
+# Build the PDF document
+doc.build(story)
+
+print(f"PDF document created at: {output_pdf_path}")
+
+from PIL import Image
+import os
+
+def combine_images_side_by_side(lidar_img_path, label_img_path, output_path):
+    """
+    Combines two images side-by-side and saves the result.
+
+    Args:
+        lidar_img_path: Path to the LiDAR image.
+        label_img_path: Path to the bounding box image.
+        output_path: Path to save the combined image.
+    """
+    try:
+        # Open images
+        img_lidar = Image.open(lidar_img_path)
+        img_label = Image.open(label_img_path)
+
+        # Determine dimensions for combined image
+        combined_width = img_lidar.width + img_label.width
+        combined_height = max(img_lidar.height, img_label.height)
+
+        # Create new blank image
+        img_combined = Image.new('RGB', (combined_width, combined_height), color='white')
+
+        # Paste images onto the combined image
+        img_combined.paste(img_lidar, (0, 0))
+        img_combined.paste(img_label, (img_lidar.width, 0))
+
+        # Ensure output directory exists
+        output_dir = os.path.dirname(output_path)
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the combined image
+        img_combined.save(output_path)
+        print(f"Combined image saved to: {output_path}")
+
+    except FileNotFoundError as e:
+        print(f"Error: {e}. Make sure the input image files exist.")
+    except Exception as e:
+        print(f"An error occurred while combining images: {e}")
+
+# Create output directory for combined images
+output_combined_dir = "/content/nuscenes_combined_images"
+os.makedirs(output_combined_dir, exist_ok=True)
+
+# Iterate through selected samples and combine visualizations
+output_lidar_dir = "/content/nuscenes_lidar_images" # Directory where LiDAR images were saved
+output_label_dir = "/content/nuscenes_label_images" # Directory where label images were saved
+
+for token in selected_sample_tokens:
+    lidar_img_path = os.path.join(output_lidar_dir, f"{token}.png")
+    label_img_path = os.path.join(output_label_dir, f"{token}.png")
+    combined_img_path = os.path.join(output_combined_dir, f"{token}_combined.png")
+
+    combine_images_side_by_side(lidar_img_path, label_img_path, combined_img_path)
+from nuscenes.utils.data_classes import Box
+from nuscenes.utils.geometry_utils import view_points
+from pyquaternion import Quaternion
+import cv2
+import matplotlib.pyplot as plt
+
+def render_sample_with_labels(nusc, sample_token, sensor='CAM_FRONT'):
+    sample = nusc.get('sample', sample_token)
+    sd_token = sample['data'][sensor]
+
+    # This version of get_sample_data returns (path, boxes, camera_intrinsic)
+    data_path, boxes, camera_intrinsic = nusc.get_sample_data(sd_token)
+
+    # Load image
+    image = cv2.imread(data_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    for ann_token in sample['anns']:
+        ann = nusc.get('sample_annotation', ann_token)
+
+        # Convert rotation list to Quaternion
+        quat = Quaternion(ann['rotation'])
+
+        # Create bounding box
+        box = Box(ann['translation'], ann['size'], quat)
+
+        # Project 3D corners of box into image
+        corners_3d = view_points(box.corners(), camera_intrinsic, normalize=True).T
+        x1, y1 = corners_3d[:, :2].min(axis=0)
+        x2, y2 = corners_3d[:, :2].max(axis=0)
+
+        # Draw rectangle & label
+        label = ann['category_name']
+        cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 2)
+        cv2.putText(image, label, (int(x1), int(y1)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+
+    plt.figure(figsize=(12, 8))
+    plt.imshow(image)
+    plt.axis('off')
+    plt.show()
+
+
+# Example: render CAM_FRONT view of sample index 20
+render_sample_with_labels(nusc, nusc.sample[20]['token'], sensor='CAM_FRONT')
+
+from nuscenes.utils.data_classes import Box
+from nuscenes.utils.geometry_utils import view_points
+from pyquaternion import Quaternion
+import cv2
+import matplotlib.pyplot as plt
+
+# Mapping from raw category names to simple labels
+CATEGORY_MAP = {
+    'vehicle.car': 'Car',
+    'vehicle.bus': 'Bus',
+    'vehicle.truck': 'Truck',
+    'vehicle.bicycle': 'Bike',
+    'vehicle.motorcycle': 'Motorbike',
+    'human.pedestrian.adult': 'Pedestrian',
+    'human.pedestrian.child': 'Pedestrian',
+    'human.pedestrian.construction_worker': 'Pedestrian',
+    'human.pedestrian.police_officer': 'Pedestrian',
+    # Add more as needed
+}
+
+def render_sample_with_labels(nusc, sample_token, sensor='CAM_FRONT'):
+    sample = nusc.get('sample', sample_token)
+    sd_token = sample['data'][sensor]
+
+    # get_sample_data returns (data_path, boxes, camera_intrinsic)
+    data_path, boxes, camera_intrinsic = nusc.get_sample_data(sd_token)
+
+    # Load image
+    image = cv2.imread(data_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    for ann_token in sample['anns']:
+        ann = nusc.get('sample_annotation', ann_token)
+
+        # Convert rotation to Quaternion
+        quat = Quaternion(ann['rotation'])
+        box = Box(ann['translation'], ann['size'], quat)
+
+        # Project 3D corners to 2D image
+        corners_3d = view_points(box.corners(), camera_intrinsic, normalize=True).T
+        x1, y1 = corners_3d[:, :2].min(axis=0)
+        x2, y2 = corners_3d[:, :2].max(axis=0)
+
+        # Draw rectangle
+        cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 2)
+
+        # Draw label
+        raw_label = ann['category_name']
+        label = CATEGORY_MAP.get(raw_label, raw_label.split('.')[-1].capitalize())
+        cv2.putText(image, label, (int(x1), max(int(y1)-10,0)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+
+    plt.figure(figsize=(12, 8))
+    plt.imshow(image)
+    plt.axis('off')
+    plt.show()
+
+# Example
+render_sample_with_labels(nusc, nusc.sample[20]['token'], sensor='CAM_FRONT')
+
+from nuscenes.nuscenes import NuScenes
+import os
+import tarfile
+import json
+
+# Path to dataset
+DATASET_ROOT = "/content/data/nuscenes"
+DATASET_FILE = os.path.join(DATASET_ROOT, "v1.0-mini.tgz")
+DATASET_VERSION_DIR = os.path.join(DATASET_ROOT, 'v1.0-mini')
+ACTUAL_DATA_ROOT = os.path.join(DATASET_VERSION_DIR, 'v1.0-mini') # Corrected path based on directory listing
+OUTPUT_DIR = "/content/nuscenes_lidar_labels" # Directory to save output
+
+# Create dataset directory
+os.makedirs(DATASET_ROOT, exist_ok=True)
+
+# Download nuScenes mini (about 1.4 GB)
+if not os.path.exists(DATASET_FILE):
+    print(f"Downloading {os.path.basename(DATASET_FILE)}...")
+    !wget -c https://www.nuscenes.org/data/v1.0-mini.tgz -O {DATASET_FILE}
+else:
+    print(f"{os.path.basename(DATASET_FILE)} already exists.")
+
+
+# Ensure the target extraction directory exists
+os.makedirs(DATASET_VERSION_DIR, exist_ok=True)
+
+# Extract files to the correct subdirectory
+# Check if the dataset is already extracted to avoid re-extracting every time
+if not os.path.exists(os.path.join(ACTUAL_DATA_ROOT, 'category.json')): # Check for a known file in the actual data root
+    print(f"Extracting {os.path.basename(DATASET_FILE)} to {DATASET_VERSION_DIR}...")
+    try:
+        with tarfile.open(DATASET_FILE, "r:gz") as tar:
+            tar.extractall(path=DATASET_VERSION_DIR)
+        print("Extraction complete.")
+    except tarfile.ReadError:
+        print(f"Error reading tar file: {DATASET_FILE}. It might be corrupted. Please delete it and try again.")
+    except Exception as e:
+        print(f"An error occurred during extraction: {e}")
+else:
+    print("Dataset already extracted.")
+
+
+# Load nuScenes v1.0-mini
+if os.path.exists(os.path.join(ACTUAL_DATA_ROOT, 'category.json')):
+    nusc = NuScenes(version='v1.0-mini', dataroot=DATASET_VERSION_DIR, verbose=True)
+
+    # Create output directory if it doesn't exist
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    print(f"\nSaving LiDAR data and labels to {OUTPUT_DIR}")
+
+    # Iterate through each sample in the dataset
+    for i, sample in enumerate(nusc.sample):
+        print(f"\nProcessing sample {i+1}/{len(nusc.sample)}: {sample['token']}")
+
+        # Extract LiDAR data path
+        lidar_token = sample['data']['LIDAR_TOP']
+        lidar_data = nusc.get('sample_data', lidar_token)
+        lidar_filepath = os.path.join(nusc.dataroot, lidar_data['filename'])
+        print(f"  LiDAR data path: {lidar_filepath}")
+
+        # Extract labels (annotations)
+        annotations = []
+        print("  Annotations:")
+        for ann_token in sample['anns']:
+            ann = nusc.get('sample_annotation', ann_token)
+            annotations.append(ann)
+            print(f"    - Category: {ann['category_name']}, Token: {ann['token']}")
+
+        # Prepare data for saving
+        sample_data = {
+            "sample_token": sample['token'],
+            "lidar_filepath": lidar_filepath,
+            "annotations": annotations
+        }
+
+        # Define output filename
+        output_filename = os.path.join(OUTPUT_DIR, f"{sample['token']}.json")
+
+        # Save data to JSON file
+        with open(output_filename, 'w') as f:
+            json.dump(sample_data, f, indent=4)
+
+        print(f"  Saved data to {output_filename}")
+
+
+else:
+    print("Dataset extraction failed. Cannot load NuScenes.")
